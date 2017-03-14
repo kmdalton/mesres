@@ -4,6 +4,8 @@ import cvxpy as cvx
 from scipy import sparse
 from time import time
 
+pool = Pool(cpu_count())
+
 def project(W, **kw):
     verbose = kw.get('verbose', False)
     bound = kw.get('bound', 0.) 
@@ -46,8 +48,9 @@ class maxent():
         alpha = kw.get('alpha', 1e-2)
         accuracy_cutoff = kw.get('accuracy', 1e-3) #Fraction of change in an iteration
         maxiter = kw.get('maxiter', 100)
-        rho = kw.get('rho', 0.) #Strength of L2 Regularization
-        alpha = alpha/((1.-rho)*C)
+        rho = kw.get('rho', None)  #Strength of L2 Regularization
+        if rho is not None:
+            alpha = alpha/((1.-rho)*C)
         objective,params = [],[]
         start = time()
         if verbose:
@@ -56,7 +59,7 @@ class maxent():
         for i in range(maxiter):
             if verbose:
                 print "Entering gradient descent cycle {}/{}".format(i+1, maxiter)
-            W = W + alpha*((1-rho)*self.gradient(W) - rho*2.*W)
+            W = W + alpha*self.gradient(W, rho=rho) 
             if verbose:
                 print "Projecting gradient step with cvx ..."
             W = project(W, bound=bound)
@@ -73,12 +76,21 @@ class maxent():
                     break
         return np.array(objective), np.array(params)
 
-    def gradient(self, W): 
+    def gradient(self, W, rho=None): 
         W = sparse.csr_matrix(np.diag(W))
         J = self.mask.T*W*self.mask
         J.data = np.log(J.data)
         J = J.todense()
-        return -np.array([np.sum(J[(a.T*a).nonzero()] + 1) for a in self.mask])
+        grad = -np.array([np.sum(J[(a.T*a).nonzero()] + 1) for a in self.mask])
+        if rho is not None:
+            reg = -np.array([(2.*w*a.T*a).sum() for w,a in zip(W.diagonal(),self.mask)])
+            grad = (1. - rho)*grad + rho*reg
+        return grad
+
+    def pgradient(self, W):
+        gmaker = gradient_maker(self.mask, W)
+        grad = pool.map(gmaker, range(self.M))
+        return np.array(grad)
 
     def __call__(self, w):
         W = sparse.csr_matrix(w)
@@ -87,6 +99,15 @@ class maxent():
         LogJ.data = np.log(LogJ.data)
         return (-J.multiply(LogJ)).sum()
 
+class gradient_maker():
+    def __init__(self, A, W): 
+        self.mask = A
+        self.W = sparse.csr_matrix(np.diag(W))
+        J = self.mask.T*W*self.mask
+        J.data = np.log(J.data)
+        self.J = J.todense()
+    def __call__(self, i): 
+        return -np.sum(self.J[(self.mask[i].T*self.mask[i]).nonzero()] + 1)
 
 class hessian_maker():
     """
@@ -111,7 +132,17 @@ class hessian_maker():
 def shrink_psd(C, n=100):
     l,l = C.shape
     shrunk = lambda alpha: (1. - alpha)*C + alpha*np.identity(l)
-    X = np.linspace(0., 1., n)
-    Y = np.array([np.linalg.eig(shrunk(i))[0].min() for i in X])
-    return shrunk(X[Y>0.][0])
+    CW = None
+    for alpha in np.linspace(0., 1., n):
+        CW = shrunk(alpha)
+        if np.linalg.eig(shrunk(alpha))[0].min() > 0.:
+            break
+    return CW
 
+def joint_binmat(mask):
+    I,J = [],[]
+    for i,a in enumerate(A.T):
+        x,y = A.multiply(a).nonzero()
+        I = np.concatenate(I, x)
+        J = np.concatenate(J, y+l*i)
+    

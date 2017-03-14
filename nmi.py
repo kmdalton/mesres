@@ -65,6 +65,11 @@ ordMapping[ord(' ')] = aaMapping['-']
 #Would be interesting to see how this compares in prokaryotes versus eukaryotes
 BGQ = np.array([0.073, 0.025, 0.050, 0.061, 0.042, 0.072, 0.023, 0.053, 0.064, 0.089, 0.023, 0.043, 0.052, 0.040, 0.052, 0.073, 0.056, 0.063, 0.013, 0.033])
 
+
+def consensus(mtx):
+    s = map(lambda x: np.argmax(np.bincount(x)), mtx.T)
+    return np.array(s)
+
 #Takes a iterable of aligned sequences and returns the corresponding numpy array
 def binMatrix(seqs):
     # keep only sequences that have the mode length
@@ -263,13 +268,18 @@ def marginal_entropy(mtx, **kw):
     return -np.sum(p*np.log2(p + (p==0.)), 0)
 
 def joint_entropy(mtx, **kw):
+    gaps = kw.get('gaps', True)
+    pseudocounts = kw.get('pseudocounts', 0.)
     m,l = mtx.shape
     k = mtx.max() + 1
+    if gaps == False:
+        k = k-1
     W = kw.get('weights', np.ones(m)/float(m))
     J = np.zeros((l,l))
     for i in range(k):
         for j in range(k):
             p = np.matmul(W*(mtx==i).T, mtx==j)
+            p = (1. - pseudocounts)*p + pseudocounts/float(k)/float(k)
             J = J - p*np.log2(p + (p==0))
     return J
 
@@ -286,11 +296,25 @@ def chi2(mtx, **kw):
             J[x,y] = J[x,y] + np.square(o[x,y]-e[x,y])/e[x,y]
     return J
 
+def chiA(mtx, **kw):
+    m,l = mtx.shape
+    k = mtx.max() + 1
+    W = kw.get('weights', np.ones(m)/float(m))
+    J = np.zeros((l,l))
+    for i in range(k):
+        for j in range(k):
+            e = np.outer(np.matmul(W,(mtx==i)), np.matmul(W,(mtx==j)))
+            x,y = np.nonzero(e)
+            o = np.matmul(W*(mtx==i).T, mtx==j)
+            J[x,y] = J[x,y] + np.abs(o[x,y]-e[x,y])/e[x,y]
+    return J
+
 def mutual_information(mtx, **kw):
     m,l = mtx.shape
     W = kw.get('weights', np.ones(m)/float(m))
-    H = marginal_entropy(mtx, weights=W)
+    gaps = kw.get('gaps', True)
     J = joint_entropy(mtx, weights=W)
+    H = np.diag(J)
     return H[:,None] + H - J
 
 def pointwise_mutual_information(mtx, **kw):
@@ -318,9 +342,11 @@ def apcnmi(mtx, **kw):
 def nmi(mtx, **kw):
     m,l = mtx.shape
     W = kw.get('weights', np.ones(m)/float(m))
-    J = joint_entropy(mtx, weights=W)
+    pseudocounts = kw.get('pseudocounts', 0.)
+    J = joint_entropy(mtx, weights=W, pseudocounts=pseudocounts)
     H = np.diag(J)
     return (H[:,None] + H - J)/J
+        
 
 def apcmi(mtx, **kw):
     m,l = mtx.shape
