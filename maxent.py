@@ -83,7 +83,8 @@ class maxent():
         J = J.todense()
         grad = -np.array([np.sum(J[(a.T*a).nonzero()] + 1) for a in self.mask])
         if rho is not None:
-            reg = -np.array([(2.*w*a.T*a).sum() for w,a in zip(W.diagonal(),self.mask)])
+            #reg = -np.array([(2.*w*a.T*a).sum() for w,a in zip(W.diagonal(),self.mask)]) #L2
+            reg = -np.array([(a.T*a).sum() for a in self.mask]) #L1
             grad = (1. - rho)*grad + rho*reg
         return grad
 
