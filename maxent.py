@@ -11,7 +11,7 @@ def project(W, **kw):
     bound = kw.get('bound', 0.) 
     M = len(W)
     V = cvx.Variable(M)
-    p = cvx.Problem(cvx.Minimize(cvx.norm2(V-W)), [cvx.sum_entries(V) == 1., V >= bound])
+    p = cvx.Problem(cvx.Minimize(cvx.norm2(V-W)), [cvx.sum_entries(V) == 1., V > bound])
     try:
         p.solve(max_iters=100000, verbose=verbose)
     except:
@@ -79,12 +79,15 @@ class maxent():
     def gradient(self, W, rho=None): 
         W = sparse.csr_matrix(np.diag(W))
         J = self.mask.T*W*self.mask
-        J.data = np.log(J.data)
-        J = J.todense()
-        grad = -np.array([np.sum(J[(a.T*a).nonzero()] + 1) for a in self.mask])
+        J.data = 1. + np.log(J.data)
+        #J = J.todense()
+        #grad = -np.array([np.sum(J[(a.T*a).nonzero()] + 1) for a in self.mask])
+        grad = -(self.mask*J*self.mask.T).diagonal()
         if rho is not None:
             #reg = -np.array([(2.*w*a.T*a).sum() for w,a in zip(W.diagonal(),self.mask)]) #L2
             reg = -np.array([(a.T*a).sum() for a in self.mask]) #L1
+            #reg = -(self.mask*self.mask.T).diagonal() #L1
+            #reg = reg*(1.*(np.array(W.diagonal()) > 0.))
             grad = (1. - rho)*grad + rho*reg
         return grad
 
@@ -110,26 +113,6 @@ class gradient_maker():
     def __call__(self, i): 
         return -np.sum(self.J[(self.mask[i].T*self.mask[i]).nonzero()] + 1)
 
-class hessian_maker():
-    """
-    COMPLETELY EXPERIMENTAL 
-    NONFUNCTIONAL CODE
-    """
-    def __init__(self, mask):
-        self.A = mask
-
-    def __call__(self, W): 
-        M,L = self.A.shape
-        W = sparse.csr_matrix(np.diag(W))
-        H = np.zeros((M,M))
-        J = A.T*W*A
-        J.data = np.log(J.data)
-        J = J.todense()
-        for i,a in enumerate(A):
-            for j,b in enumerate(A):
-                H[i,j] = J[((a.T*a).multiply(a.T*a)).nonzero()]
-        return H
-
 def shrink_psd(C, n=100):
     l,l = C.shape
     shrunk = lambda alpha: (1. - alpha)*C + alpha*np.identity(l)
@@ -140,10 +123,19 @@ def shrink_psd(C, n=100):
             break
     return CW
 
-def joint_binmat(mask):
-    I,J = [],[]
-    for i,a in enumerate(A.T):
-        x,y = A.multiply(a).nonzero()
-        I = np.concatenate(I, x)
-        J = np.concatenate(J, y+l*i)
-    
+def joint_binmat(A, **kw):
+    verbose = kw.get('verbose', False)
+    m,l = A.shape
+    A = A.T
+    return sparse.hstack([A.multiply(a.t) for a in A.T])
+
+def reference_hessian(A, W):
+    m,l = A.shape
+    H = np.zeros((m,m))
+    P = A.T*np.diag(W)*A
+    I = P.copy()
+    I[P>0.] = 1./I[P>0.]
+    for i in range(m):
+        for j in range(m):
+            H[i,j] = (A[i].T*A[i]).multiply(A[j].T*A[j]).multiply(I).sum()
+    return H
