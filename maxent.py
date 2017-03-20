@@ -65,7 +65,7 @@ class maxent():
             W = project(W, bound=bound)
             #if verbose:
             #    print "W is: {}".format(W)
-            objective.append(self(W) - np.sum(np.square(W)))
+            objective.append(self(W, rho) - np.sum(np.square(W)))
             params.append(W)
             if verbose:
                 print "\tCycle {} complete, objective = {}".format(i+1, objective[-1])
@@ -96,12 +96,15 @@ class maxent():
         grad = pool.map(gmaker, range(self.M))
         return np.array(grad)
 
-    def __call__(self, w):
+    def __call__(self, w, rho=None):
         W = sparse.csr_matrix(w)
         J = self.mask.T*(self.mask.multiply(W.T))
         LogJ = J.copy()
         LogJ.data = np.log(LogJ.data)
-        return (-J.multiply(LogJ)).sum()
+        obj = (-J.multiply(LogJ)).sum()
+        if rho is not None:
+            obj += rho*J.sum()
+        return obj
 
 class gradient_maker():
     def __init__(self, A, W): 
