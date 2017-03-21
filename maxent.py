@@ -46,12 +46,12 @@ class maxent():
         bound = kw.get('bound', 0.)
         W = kw.get('wo', np.ones(self.M)/float(self.M))
         alpha = kw.get('alpha', 1e-2)
-        accuracy_cutoff = kw.get('accuracy', 1e-3) #Fraction of change in an iteration
+        accuracy_cutoff = kw.get('accuracy', -1.) #Fraction of change in an iteration
         maxiter = kw.get('maxiter', 100)
         rho = kw.get('rho', None)  #Strength of L2 Regularization
         if rho is not None:
             alpha = alpha/((1.-rho)*C)
-        objective,params = [],[]
+        objective,params = [self(W, rho)],[W]
         start = time()
         if verbose:
             print "W is initialized to: {}".format(W)
@@ -63,17 +63,18 @@ class maxent():
             if verbose:
                 print "Projecting gradient step with cvx ..."
             W = project(W, bound=bound)
-            #if verbose:
-            #    print "W is: {}".format(W)
-            objective.append(self(W, rho) - np.sum(np.square(W)))
-            params.append(W)
+            obj = self(W, rho)
+            diff = np.abs((obj - objective[-1])/objective[-1])
+            if obj <= objective[-1]: 
+                alpha = alpha/2.
+            else:
+                objective.append(obj)
+                params.append(W)
+                if np.abs(diff) <= accuracy_cutoff:
+                    break
             if verbose:
                 print "\tCycle {} complete, objective = {}".format(i+1, objective[-1])
                 print "\t{} s elapsed".format(time() - start)
-            if len(objective) > 2:
-                diff = np.abs(objective[-1] - objective[-2])/objective[-2]
-                if diff <= accuracy_cutoff:
-                    break
         return np.array(objective), np.array(params)
 
     def gradient(self, W, rho=None): 
@@ -103,7 +104,7 @@ class maxent():
         LogJ.data = np.log(LogJ.data)
         obj = (-J.multiply(LogJ)).sum()
         if rho is not None:
-            obj += rho*J.sum()
+            obj = (1. - rho)*obj - rho*np.abs(np.sum(J.data))
         return obj
 
 class gradient_maker():
