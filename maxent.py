@@ -8,10 +8,9 @@ pool = Pool(cpu_count())
 
 def project(W, **kw):
     verbose = kw.get('verbose', False)
-    bound = kw.get('bound', 0.) 
     M = len(W)
     V = cvx.Variable(M)
-    p = cvx.Problem(cvx.Minimize(cvx.norm2(V-W)), [cvx.sum_entries(V) == 1., V > bound])
+    p = cvx.Problem(cvx.Minimize(cvx.norm2(V-W)), [cvx.sum_entries(V) == 1., V > 0.])
     try:
         p.solve(max_iters=100000, verbose=verbose)
     except:
@@ -21,7 +20,6 @@ def project(W, **kw):
         w[w < 0.] = 0.
         w = project(w)
     return w
-
 
 def get_sparse_mask(mtx, **kw):
     gaps = kw.get('gaps', True)
@@ -33,89 +31,161 @@ def get_sparse_mask(mtx, **kw):
     return A
 
 class maxent():
+    """A class for maximizing regularized joint entropy of MSAs
+
+    Parameters
+    ----------
+    mtx : numpy.ndarray
+        array representing a protein multiply sequence alignment. 
+        see nmi.binMatrix. mtx.shape == (num_seqs, num_residues)
+        residues
+    verbose : bool, optional
+        Print updates at each gradient iteration. Defaults to False
+    alpha : float, optional
+        The initial learning rate for opimization. Defaults to 0.1.
+    rho : float, optional
+        The amount of l1 regularization to use. Defaults to 0.
+    wo : np.ndarray, optional
+        Initial sequence weights for warm starts. len(wo) == num_seqs
+    gaps : bool, optional
+        Weather to consider gaps as part of the joint probability space. 
+        Defaults to False.
+
+    Attributes
+    ----------
+        gaps : bool
+            setting for whether to consider gap characters during entropy maximization
+        W : list
+            list of sequence weights. appended each time gradient_step() is called. 
+        objective : list
+            list of objective values corresponding to W. 
+        verbose : bool
+            Whether to print updates during gradient optimization. 
+        alpha : float
+            learning rate. updated during gradient step as necessary. 
+        rho : float
+            rho dictates the amount of l1 regularization to apply; it is [0, 1)
+        iterations : int
+            number of gradient ascent iterations performed. 
+    """
+
     def __init__(self, mtx, **kw):
         gaps = kw.get('gaps', False)
         self.mask= get_sparse_mask(mtx, gaps=gaps)
-        self.M = self.mask.shape[0]
+        M = self.mask.shape[0]
+        self.verbose = kw.get('verbose', False)
+        self.W = [kw.get('wo', np.ones(M)/float(M))]
+        self.alpha = kw.get('alpha', 1e-2)
+        self.rho = kw.get('rho', None)  #Strength of L2 Regularization
+        self.iterations = 0
+        if self.rho is not None:
+            C = float((self.mask.T*self.mask).size)
+            self.alpha = self.alpha/((1.-self.rho)*C)
+        self.objective = [self()]
 
-    def gradient_descent(self, **kw):
+    def gradient_step(self):
+        """
+        Take a gradient step from the current last recorded parameters (self.W[-1]). 
+        After the step, update self.objective, self.W. If the gradient step does not
+        increase the objective function value, decrement self.alpha = self.alpha/2.
+        """
+        grad = self.gradient()
+        W = self.W[-1] + self.alpha*grad
+        W = project(W)
+        obj = self(W)
+        #pseudo line search
+        for i in range(10): 
+            if obj > self.objective[-1]:
+                break
+            if self.verbose:
+                print "{} is lower than stored objective value {}".format(obj, self.objective[-1])
+                print "Decrementing alpha from {} to {}".format(self.alpha, self.alpha/2.)
+            self.alpha = self.alpha/2.
+            W = self.W[-1] + self.alpha*grad
+            W = project(W)
+            obj = self(W)
+        self.objective.append(obj)
+        self.W.append(W)
+        self.iterations += 1
+
+    def gradient_ascent(self, **kw):
+        """
+        Parameters
+        ----------
+        maxiter : int, optional
+            Max number of gradient ascent iterations to undergo; default is 100
+        convergence_threshold : float, optional
+            Fractional difference between objective function before and 
+            after a gradient step. Once this is attained, stop iteration. 
+            The default is 1e-4
+        """
         #C is a normalization constant for the learning rate
         #it's an attempt to make the parameters close to universal
-        C = float((self.mask.T*self.mask).size)
-        verbose = kw.get('verbose', False)
-        bound = kw.get('bound', 0.)
-        W = kw.get('wo', np.ones(self.M)/float(self.M))
-        alpha = kw.get('alpha', 1e-2)
-        accuracy_cutoff = kw.get('accuracy', -1.) #Fraction of change in an iteration
         maxiter = kw.get('maxiter', 100)
-        rho = kw.get('rho', None)  #Strength of L2 Regularization
-        if rho is not None:
-            alpha = alpha/((1.-rho)*C)
-        objective,params = [self(W, rho)],[W]
+        convergence_threshold = kw.get('convergence_threshold', 1e-4)
         start = time()
-        if verbose:
-            print "W is initialized to: {}".format(W)
-            print "\tInitial objective value = {}".format(self(W))
+        if self.verbose:
+            print "\tInitial objective value = {}".format(self.objective[-1])
         for i in range(maxiter):
-            if verbose:
+            if self.verbose:
                 print "Entering gradient descent cycle {}/{}".format(i+1, maxiter)
-            W = W + alpha*self.gradient(W, rho=rho) 
-            if verbose:
-                print "Projecting gradient step with cvx ..."
-            W = project(W, bound=bound)
-            obj = self(W, rho)
-            diff = np.abs((obj - objective[-1])/objective[-1])
-            if obj <= objective[-1]: 
-                alpha = alpha/2.
-            else:
-                objective.append(obj)
-                params.append(W)
-                if np.abs(diff) <= accuracy_cutoff:
-                    break
-            if verbose:
-                print "\tCycle {} complete, objective = {}".format(i+1, objective[-1])
+            self.gradient_step()
+            diff = np.abs((self.objective[-2] - self.objective[-1])/self.objective[-2])
+            if self.verbose:
+                print "\tCycle {} complete, {}% diff, objective = {}".format(i+1, 100.*diff, self.objective[-1])
                 print "\t{} s elapsed".format(time() - start)
-        return np.array(objective), np.array(params)
+            if diff <= convergence_threshold:
+                print "Convergence threshold attained. Stopping iteration."
+                break
 
-    def gradient(self, W, rho=None): 
-        W = sparse.csr_matrix(np.diag(W))
+    def gradient(self, W=None): 
+        """
+        Return the gradient of the objective function with the current weights.
+
+        Parameters
+        ----------
+        W : np.ndarray, optional
+            Compute the value of the objective function for a different set of weights.
+
+        Returns
+        -------
+        grad : np.ndarray
+            The gradient with respect to the sequence weights
+        """
+        W = sparse.csr_matrix(np.diag(self.W[-1]))
         J = self.mask.T*W*self.mask
         J.data = 1. + np.log(J.data)
-        #J = J.todense()
-        #grad = -np.array([np.sum(J[(a.T*a).nonzero()] + 1) for a in self.mask])
         grad = -(self.mask*J*self.mask.T).diagonal()
-        if rho is not None:
-            #reg = -np.array([(2.*w*a.T*a).sum() for w,a in zip(W.diagonal(),self.mask)]) #L2
+        if self.rho is not None:
             reg = -np.array([(a.T*a).sum() for a in self.mask]) #L1
-            #reg = -(self.mask*self.mask.T).diagonal() #L1
-            #reg = reg*(1.*(np.array(W.diagonal()) > 0.))
-            grad = (1. - rho)*grad + rho*reg
+            grad = (1. - self.rho)*grad + self.rho*reg
         return grad
 
-    def pgradient(self, W):
-        gmaker = gradient_maker(self.mask, W)
-        grad = pool.map(gmaker, range(self.M))
-        return np.array(grad)
+    def __call__(self, W=None):
+        """
+        Return the value of the objective function with the current weights.
 
-    def __call__(self, w, rho=None):
-        W = sparse.csr_matrix(w)
+        Parameters
+        ----------
+        W : np.ndarray, optional
+            Compute the value of the objective function for a different set of weights.
+
+        Returns
+        -------
+        obj : float
+            The value of the objective function
+        """
+        if W is None:
+            W = sparse.csr_matrix(self.W[-1])
+        else:
+            W = sparse.csr_matrix(W)
         J = self.mask.T*(self.mask.multiply(W.T))
         LogJ = J.copy()
         LogJ.data = np.log(LogJ.data)
         obj = (-J.multiply(LogJ)).sum()
-        if rho is not None:
-            obj = (1. - rho)*obj - rho*np.abs(np.sum(J.data))
+        if self.rho is not None:
+            obj = (1. - self.rho)*obj - self.rho*np.sum(np.abs(J.data))
         return obj
-
-class gradient_maker():
-    def __init__(self, A, W): 
-        self.mask = A
-        self.W = sparse.csr_matrix(np.diag(W))
-        J = self.mask.T*W*self.mask
-        J.data = np.log(J.data)
-        self.J = J.todense()
-    def __call__(self, i): 
-        return -np.sum(self.J[(self.mask[i].T*self.mask[i]).nonzero()] + 1)
 
 def shrink_psd(C, n=100):
     l,l = C.shape
