@@ -1,10 +1,8 @@
-from multiprocessing import Pool,cpu_count
 import numpy as np
 import cvxpy as cvx
 from scipy import sparse
 from time import time
 
-pool = Pool(cpu_count())
 
 def project(W, **kw):
     verbose = kw.get('verbose', False)
@@ -29,6 +27,9 @@ def get_sparse_mask(mtx, **kw):
         k = k-1
     A = sparse.csr_matrix(np.hstack((1.*(mtx==i) for i in range(k))))
     return A
+
+def l2Regularizer(W):
+    return np.sum(np.square(W)), 2.*W
 
 class maxent():
     """A class for maximizing regularized joint entropy of MSAs
@@ -75,12 +76,19 @@ class maxent():
         M = self.mask.shape[0]
         self.verbose = kw.get('verbose', False)
         self.W = [kw.get('wo', np.ones(M)/float(M))]
-        self.alpha = kw.get('alpha', 1e-2)
+        self.alpha = kw.get('alpha', 1e-1)
         self.rho = kw.get('rho', None)  #Strength of L2 Regularization
         self.iterations = 0
+        self.regularizer = None
+
+        #Normalize the learning rate
+        C = float((self.mask.T*self.mask).size)
         if self.rho is not None:
-            C = float((self.mask.T*self.mask).size)
             self.alpha = self.alpha/((1.-self.rho)*C)
+            self.regularizer = kw.get('regularizer', l2Regularizer)
+        else:
+            self.alpha = self.alpha/C
+
         self.objective = [self()]
 
     def gradient_step(self):
@@ -157,7 +165,8 @@ class maxent():
         J.data = 1. + np.log(J.data)
         grad = -(self.mask*J*self.mask.T).diagonal()
         if self.rho is not None:
-            reg = -np.array([(a.T*a).sum() for a in self.mask]) #L1
+            W = W.diagonal()
+            reg = self.regularizer(W)[1]
             grad = (1. - self.rho)*grad + self.rho*reg
         return grad
 
@@ -184,7 +193,7 @@ class maxent():
         LogJ.data = np.log(LogJ.data)
         obj = (-J.multiply(LogJ)).sum()
         if self.rho is not None:
-            obj = (1. - self.rho)*obj - self.rho*np.sum(np.abs(J.data))
+            obj = (1. - self.rho)*obj - self.rho*self.regularizer(W.todense())[0]
         return obj
 
 def shrink_psd(C, n=100):
