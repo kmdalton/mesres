@@ -14,7 +14,7 @@ def project(W, **kw):
     except:
         p.solve(solver="SCS", max_iters=100000, verbose=verbose)
     w = np.array(p.variables()[0].value).flatten()
-    if w.min() < 0.:
+    while w.min() < 0.:
         w[w < 0.] = 0.
         w = project(w)
     return w
@@ -28,11 +28,15 @@ def get_sparse_mask(mtx, **kw):
     A = sparse.csr_matrix(np.hstack((1.*(mtx==i) for i in range(k))))
     return A
 
+def maxRegularizer(W):
+    return W.max(),1.*(W == W.max())
+    
 def l2Regularizer(W):
-    return np.sum(np.square(W)), 2.*W
+    R = np.linalg.norm(W, 2)
+    return R, W/R
 
 class maxent():
-    """A class for maximizing regularized joint entropy of MSAs
+    """A clnp.sum(np.square(W))ass for maximizing regularized joint entropy of MSAs
 
     Parameters
     ----------
@@ -97,21 +101,15 @@ class maxent():
         After the step, update self.objective, self.W. If the gradient step does not
         increase the objective function value, decrement self.alpha = self.alpha/2.
         """
+        n = 3 #Granularity of line search
         grad = self.gradient()
-        W = self.W[-1] + self.alpha*grad
-        W = project(W)
-        obj = self(W)
-        #pseudo line search
-        for i in range(10): 
-            if obj > self.objective[-1]:
-                break
-            if self.verbose:
-                print "{} is lower than stored objective value {}".format(obj, self.objective[-1])
-                print "Decrementing alpha from {} to {}".format(self.alpha, self.alpha/2.)
-            self.alpha = self.alpha/2.
-            W = self.W[-1] + self.alpha*grad
-            W = project(W)
-            obj = self(W)
+        #grad = grad/np.linalg.norm(grad, 2)
+        W = project(self.W[-1] + grad)
+        A = np.linspace(0., 1., n+2)
+        Objective = map(self, [(1. - a)*self.W[-1] + a*W for a in A])
+        a = A[np.argmax(Objective)]
+        W = (1. - a)*self.W[-1] + a*W
+        obj = np.max(Objective)
         self.objective.append(obj)
         self.W.append(W)
         self.iterations += 1
@@ -160,10 +158,14 @@ class maxent():
         grad : np.ndarray
             The gradient with respect to the sequence weights
         """
-        W = sparse.csr_matrix(np.diag(self.W[-1]))
+        if W is None:
+            W = sparse.csr_matrix(np.diag(self.W[-1]))
+        else:
+            W = sparse.csr_matrix(np.diag(W))
         J = self.mask.T*W*self.mask
         J.data = 1. + np.log(J.data)
         grad = -(self.mask*J*self.mask.T).diagonal()
+        grad = grad/np.linalg.norm(grad, 2)
         if self.rho is not None:
             W = W.diagonal()
             reg = self.regularizer(W)[1]
