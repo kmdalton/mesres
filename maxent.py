@@ -31,12 +31,51 @@ def get_sparse_mask(mtx, **kw):
 def maxRegularizer(W):
     return W.max(),1.*(W == W.max())
     
-def l2Regularizer(W):
-    R = np.linalg.norm(W, 2)
-    return R, W/R
+class maxRegularizer():
+    def __init__(self, maxent=None):
+        pass
+    def __call__(self, W):
+        return W.max(),1.*(W == W.max())
+    
+    
+class l2Regularizer():
+    def __init__(self, maxent=None):
+        pass
+    def __call__(self, W):
+        R = np.square(np.linalg.norm(W, 2))
+        return R, 2*W
+
+class meanConstrainedRegularizer():
+    def __init__(self, maxent=None):
+        pass
+    def __call__(self, W):
+        m = len(W)
+        R = np.square(np.linalg.norm(W - np.mean(W), 2))
+        return R, 2*(W - np.mean(W)) * (1 + 1./float(m))
+
+
+class l1JPDRegularizer():
+    def __init__(self, maxent):
+        self.maxent = maxent
+    def __call__(self, W):
+        W = sparse.csr_matrix(W)
+        R = np.sum(np.abs(self.J.data))
+        grad = (self.mask*self.mask.T).diagonal()
+        grad = grad/np.linalg.norm(grad, 2)
+        return R, grad
+
+class l2JPDRegularizer():
+    def __init__(self, maxent):
+        self.maxent = maxent
+    def __call__(self, W):
+        W = sparse.csr_matrix(W)
+        R = np.sum(np.square(self.maxent.J.data))
+        grad = 2.*(self.maxent.mask*self.maxent.J*self.maxent.mask.T).diagonal()
+        grad = grad/np.linalg.norm(grad, 2)
+        return R, grad
 
 class maxent():
-    """A clnp.sum(np.square(W))ass for maximizing regularized joint entropy of MSAs
+    """A class for maximizing regularized joint entropy of MSAs
 
     Parameters
     ----------
@@ -80,6 +119,7 @@ class maxent():
         M = self.mask.shape[0]
         self.verbose = kw.get('verbose', False)
         self.W = [kw.get('wo', np.ones(M)/float(M))]
+        self.J = None
         self.alpha = kw.get('alpha', 1e-1)
         self.rho = kw.get('rho', None)  #Strength of L2 Regularization
         self.iterations = 0
@@ -90,6 +130,7 @@ class maxent():
         if self.rho is not None:
             self.alpha = self.alpha/((1.-self.rho)*C)
             self.regularizer = kw.get('regularizer', l2Regularizer)
+            self.regularizer = self.regularizer(self)
         else:
             self.alpha = self.alpha/C
 
@@ -163,6 +204,7 @@ class maxent():
         else:
             W = sparse.csr_matrix(np.diag(W))
         J = self.mask.T*W*self.mask
+        self.J = J
         J.data = 1. + np.log(J.data)
         grad = -(self.mask*J*self.mask.T).diagonal()
         grad = grad/np.linalg.norm(grad, 2)
@@ -191,6 +233,7 @@ class maxent():
         else:
             W = sparse.csr_matrix(W)
         J = self.mask.T*(self.mask.multiply(W.T))
+        self.J = J
         LogJ = J.copy()
         LogJ.data = np.log(LogJ.data)
         obj = (-J.multiply(LogJ)).sum()
