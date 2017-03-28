@@ -338,7 +338,6 @@ class maxll():
         A = np.linspace(0., self.alpha, n+2)[1:-1]
         Objective = map(self, [(1. - a)*self.W[-1] + a*W for a in A])
         a = A[np.argmax(Objective)]
-        print a
         W = (1. - a)*self.W[-1] + a*W
         obj = np.max(Objective)
         self.objective.append(obj)
