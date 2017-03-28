@@ -46,6 +46,13 @@ class l2Regularizer():
         R = np.square(np.linalg.norm(W, 2))
         return R, 2*W
 
+class l1Regularizer():
+    def __init__(self, maxent=None):
+        pass
+    def __call__(self, W):
+        R = np.linalg.norm(W, 1)
+        return R, np.ones(len(W))
+
 class meanConstrainedRegularizer():
     def __init__(self, maxent=None):
         pass
