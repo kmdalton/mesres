@@ -60,8 +60,8 @@ class l1JPDRegularizer():
         self.maxent = maxent
     def __call__(self, W):
         W = sparse.csr_matrix(W)
-        R = np.sum(np.abs(self.J.data))
-        grad = (self.mask*self.mask.T).diagonal()
+        R = np.sum(np.abs(self.maxent.J.data))
+        grad = (self.maxent.mask*self.maxent.mask.T).diagonal()
         grad = grad/np.linalg.norm(grad, 2)
         return R, grad
 
