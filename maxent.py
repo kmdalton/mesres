@@ -29,29 +29,37 @@ def get_sparse_mask(mtx, **kw):
     A = sparse.csr_matrix(np.hstack((1.*(mtx==i) for i in range(k))))
     return A
 
-def maxRegularizer(W):
-    return W.max(),1.*(W == W.max())
-    
 class maxRegularizer():
     def __init__(self, maxent=None):
         pass
     def __call__(self, W):
-        return W.max(),1.*(W == W.max())
-    
-    
+        return -W.max(),-1.*(W == W.max())
+
+class maxentRegularizer():
+    def __init__(self, maxll):
+        kw = maxll.kw
+        kw['rho'] = None
+        kw['regularizer'] = None
+        self.maxent = maxent(maxll.mtx, **kw)
+    def __call__(self, W):
+        W = np.array(W)
+        obj = self.maxent(W)
+        grad = self.maxent.gradient(W)
+        return obj,grad
+
 class l2Regularizer():
     def __init__(self, maxent=None):
         pass
     def __call__(self, W):
         R = np.square(np.linalg.norm(W, 2))
-        return R, 2*W
+        return -R, -2*W
 
 class l1Regularizer():
     def __init__(self, maxent=None):
         pass
     def __call__(self, W):
         R = np.linalg.norm(W, 1)
-        return R, np.ones(len(W))
+        return -R, -np.ones(len(W))
 
 class meanConstrainedRegularizer():
     def __init__(self, maxent=None):
@@ -59,8 +67,7 @@ class meanConstrainedRegularizer():
     def __call__(self, W):
         m = len(W)
         R = np.square(np.linalg.norm(W - np.mean(W), 2))
-        return R, 2*(W - np.mean(W)) * (1 + 1./float(m))
-
+        return -R, -2.*(W - np.mean(W)) * (1 + 1./float(m)) #TODO: check the sign of the gradient!
 
 class l1JPDRegularizer():
     def __init__(self, maxent):
@@ -70,7 +77,7 @@ class l1JPDRegularizer():
         R = np.sum(np.abs(self.maxent.J.data))
         grad = (self.maxent.mask*self.maxent.mask.T).diagonal()
         grad = grad/np.linalg.norm(grad, 2)
-        return R, grad
+        return -R, -grad
 
 class l2JPDRegularizer():
     def __init__(self, maxent):
@@ -80,7 +87,7 @@ class l2JPDRegularizer():
         R = np.sum(np.square(self.maxent.J.data))
         grad = 2.*(self.maxent.mask*self.maxent.J*self.maxent.mask.T).diagonal()
         grad = grad/np.linalg.norm(grad, 2)
-        return R, grad
+        return -R, -grad
 
 class maxent():
     """A class for maximizing regularized joint entropy of MSAs
@@ -122,6 +129,8 @@ class maxent():
     """
 
     def __init__(self, mtx, **kw):
+        self.kw = kw
+        self.mtx = mtx
         gaps = kw.get('gaps', False)
         self.mask= get_sparse_mask(mtx, gaps=gaps)
         M = self.mask.shape[0]
@@ -205,10 +214,10 @@ class maxent():
             The gradient with respect to the sequence weights
         """
         if W is None:
-            W = sparse.csr_matrix(np.diag(self.W[-1]))
+            W = sparse.csr_matrix(self.W[-1])
         else:
-            W = sparse.csr_matrix(np.diag(W))
-        J = self.mask.T*W*self.mask
+            W = sparse.csr_matrix(W)
+        J = self.mask.T*(self.mask.multiply(W.T))
         self.J = J
         J.data = 1. + np.log(J.data)
         grad = -(self.mask*J*self.mask.T).diagonal()
@@ -243,7 +252,7 @@ class maxent():
         LogJ.data = np.log(LogJ.data)
         obj = (-J.multiply(LogJ)).sum()
         if self.rho is not None:
-            obj = (1. - self.rho)*obj - self.rho*self.regularizer(W.todense())[0]
+            obj = (1. - self.rho)*obj + self.rho*self.regularizer(W.todense())[0]
         return obj
 
 def shrink_psd(C, n=100):
@@ -314,6 +323,8 @@ class maxll():
     """
 
     def __init__(self, mtx, **kw):
+        self.kw = kw
+        self.mtx = mtx
         gaps = kw.get('gaps', False)
         self.mask= get_sparse_mask(mtx, gaps=gaps)
         M = self.mask.shape[0]
@@ -435,6 +446,6 @@ class maxll():
         LogJ.data = np.log(LogJ.data)
         obj = (self.mask.T*self.mask).multiply(LogJ).sum()
         if self.rho is not None:
-            obj = (1. - self.rho)*obj - self.rho*self.regularizer(W.todense())[0]
+            obj = (1. - self.rho)*obj + self.rho*self.regularizer(W.todense())[0]
         return obj
 
